@@ -1,0 +1,13 @@
+*.swp
+.idea/
+
+AUTHORS
+ChangeLog
+build/
+dist/
+*.egg-info/
+.eggs/
+.python-version
+*.pyc
+.tox/
+.stestr/

@@ -1,0 +1,8 @@
+os: osx
+script:
+  - brew unlink python@2
+  - brew tap VirtusLab/git-machete
+  - brew install git-machete
+  - brew audit --new-formula --strict git-machete
+  - brew test git-machete
+  - git machete --version
