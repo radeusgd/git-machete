@@ -629,7 +629,7 @@ def get_default_editor():
                     raise MacheteException("<b>%s</b> is not available" % editor_repr)
             else:
                 debug("get_default_editor()", "%s is available" % editor_repr)
-                if name != "$" + git_machete_editor_var and get_config_or_none('advice.macheteEditorSelection') != 'false':
+                if name != "$" + git_machete_editor_var and get_config_or_none("advice.macheteEditorSelection") != "false":
                     sample_alternative = 'nano' if editor.startswith('vi') else 'vi'
                     sys.stderr.write(
                         fmt("Opening <b>%s</b>.\n" % editor_repr,
@@ -1359,26 +1359,46 @@ def filtered_reflog(b, prefix):
     return result
 
 
-def get_latest_checkout_timestamps():
-    # Entries are in the format '<branch_name>@{<unix_timestamp> <time-zone>}'
-    result = {}
+def raw_head_reflog():
     # %gd - reflog selector (HEAD@{<unix-timestamp> <time-zone>} for `--date=raw`;
     #   `--date=unix` is not available on some older versions of git)
     # %gs - reflog subject
-    output = popen_git("reflog", "show", "--format=%gd:%gs", "--date=raw")
-    for entry in non_empty_lines(output):
-        pattern = "^HEAD@\\{([0-9]+) .+\\}:checkout: moving from (.+) to (.+)$"
-        match = re.search(pattern, entry)
+    return non_empty_lines(popen_git("reflog", "show", "--format=%gd:%gs", "--date=raw"))
+
+
+REFLOG_CHECKOUT_PATTERN = "^HEAD@{([0-9]+) .+\\}:checkout: moving from (.+) to (.+)$"
+
+
+def get_latest_checkout_unix_timestamp_by_branch():
+    ts_by_branch = {}
+    for entry in raw_head_reflog():
+        match = re.search(REFLOG_CHECKOUT_PATTERN, entry)
         if match:
             from_branch = match.group(2)
             to_branch = match.group(3)
             # Only the latest occurrence for any given branch is interesting
             # (i.e. the first one to occur in reflog)
-            if from_branch not in result:
-                result[from_branch] = int(match.group(1))
-            if to_branch not in result:
-                result[to_branch] = int(match.group(1))
-    return result
+            if from_branch not in ts_by_branch:
+                ts_by_branch[from_branch] = int(match.group(1))
+            if to_branch not in ts_by_branch:
+                ts_by_branch[to_branch] = int(match.group(1))
+    return ts_by_branch
+
+
+def get_latest_checkout_target_branch_or_none():
+    first_match_skipped = False
+    for entry in raw_head_reflog():
+        match = re.search(REFLOG_CHECKOUT_PATTERN, entry)
+        if match:
+            if not first_match_skipped:
+                first_match_skipped = True
+            else:
+                target = match.group(3)
+                # It usually isn't the user's intention when going to previous branch
+                # to actually end up in detached HEAD state.
+                if not is_full_sha(target):
+                    return target
+    return None
 
 
 branch_defs_by_sha_in_reflog = None
@@ -1526,7 +1546,7 @@ def discover_tree():
         return root_of[b]
 
     non_root_fixed_branches = excluding(all_local_branches, roots)
-    last_checkout_timestamps = get_latest_checkout_timestamps()
+    last_checkout_timestamps = get_latest_checkout_unix_timestamp_by_branch()
     non_root_fixed_branches_by_last_checkout_timestamps = sorted((last_checkout_timestamps.get(b) or 0, b) for b in non_root_fixed_branches)
     if opt_checked_out_since:
         threshold = parse_git_timespec_to_unix_timestamp(opt_checked_out_since)
@@ -2278,7 +2298,7 @@ def traverse():
     print("")
     msg = "Reached branch %s which has no successor" \
         if cb == managed_branches[-1] else \
-        "No successor of %s needs to be slid out or synced with upstream branch or remote"
+        "No successor of %s can be slid out or synced with upstream branch or remote"
     sys.stdout.write(msg % bold(cb) + "; nothing left to update\n")
 
     if opt_return_to == "here" or (opt_return_to == "nearest-remaining" and nearest_remaining_branch == initial_branch):
@@ -2747,7 +2767,7 @@ def usage(c=None):
             It's only important to be consistent wrt. the sequence of characters used for indentation between all lines.
         """,
         "go": """
-            <b>Usage: git machete g[o] [-b/--branch] [<direction>|<local or remote branch>]</b>
+            <b>Usage: git machete g[o] [-b/--branch] [<direction>|<local or remote branch>|-]</b>
             where <direction> is one of: `d[own]`, `f[irst]`, `l[ast]`, `n[ext]`, `p[rev]`, `r[oot]`, `u[p]`
 
             When `-b`/`--branch` is absent and the parameter has a valid value for a direction,
@@ -2761,6 +2781,10 @@ def usage(c=None):
             i.e. without creating a local branch to track the remote.
             For example, `git checkout origin/master` will transition the repository to the detached HEAD state (with HEAD pointing to the same commit as `origin/master`),
             while `git machete go origin/master` will make the repository behave as if `origin/master` is the current branch.
+
+            When invoked as `git machete go -`, checks out the previous checked out branch.
+            Similar to `git checkout -`, with the difference that also allows for checking out a remote branch
+            (if it was previously checked out by `git machete go` or `git machete traverse`).
 
             <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature should be used with extra care.
             As for now, this is the only feature of git-machete that circumvents the documented git's command-line interface
@@ -3291,14 +3315,14 @@ def launch(orig_args):
         if len(in_args) > 0:
             raise MacheteException("No argument expected for `%s`%s" % (cmd, extra_explanation))
 
-    def check_optional_param(in_args):
+    def check_optional_param(in_args, forbid_lone_hyphen=True):
         if not in_args:
             return None
         elif len(in_args) > 1:
             raise MacheteException("`%s` accepts at most one argument" % cmd)
         elif not in_args[0]:
             raise MacheteException("Argument to `%s` cannot be empty" % cmd)
-        elif in_args[0][0] == "-":
+        elif in_args[0][0] == "-" and forbid_lone_hyphen:
             raise MacheteException("Option `%s` not recognized" % in_args[0])
         else:
             return in_args[0]
@@ -3458,7 +3482,7 @@ def launch(orig_args):
             # No need to read definition file.
             usage("format")
         elif cmd in ("g", "go"):
-            param = check_optional_param(parse_options(args, "b:", ["branch="]))
+            param = check_optional_param(parse_options(args, "b:", ["branch="]), forbid_lone_hyphen=False)
             expect_no_operation_in_progress()
             if opt_branch:
                 dest = opt_branch
@@ -3468,10 +3492,15 @@ def launch(orig_args):
             else:
                 if not param:
                     raise MacheteException("`%s` expects exactly one argument: one of `%s` or a branch name" % (cmd, allowed_directions(allow_current=False)))
-                read_definition_file()
-                dest = parse_direction_or_none(direction=param, include_current=False, down_pick_if_multiple=True) or param
-                if dest not in all_branches():
-                    raise MacheteException("`%s` is not a local or remote branch, or any of `%s`" % (dest, allowed_directions(allow_current=False)))
+                if param == "-":
+                    dest = get_latest_checkout_target_branch_or_none()
+                    if dest not in all_branches():
+                        raise MacheteException("Cannot determine previous branch")
+                else:
+                    read_definition_file()
+                    dest = parse_direction_or_none(direction=param, include_current=False, down_pick_if_multiple=True) or param
+                    if dest not in all_branches():
+                        raise MacheteException("`%s` is not a local or remote branch, or any of `%s`" % (dest, allowed_directions(allow_current=False)))
             if dest != current_branch_or_none():
                 check_out_existing_branch(dest)
         elif cmd == "help":
