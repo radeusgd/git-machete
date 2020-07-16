@@ -912,13 +912,28 @@ def currently_rebased_branch_or_none():
         return re.sub("^refs/heads/", "", raw)
 
 
-def currently_checked_out_branch_or_none():
+def currently_checked_out_local_branch_or_none():
     try:
         raw = popen_git("symbolic-ref", "--quiet", "HEAD").strip()
         # We unorthodoxly allow for a remote branch (refs/remotes/...) to be the current branch as well.
         return re.sub("^refs/[^/]+/", "", raw)
-    except MacheteException:
+    except MacheteException:  # e.g. detached HEAD
         return None
+
+
+def currently_checked_out_remote_branch_or_none():
+    machete_head_path = get_git_subpath("MACHETE_HEAD")
+    if not os.path.isfile(machete_head_path):
+        return None
+    with open(machete_head_path) as f:
+        prefixed_machete_head = f.read()
+    machete_head = re.sub("^refs/[^/]+/", "", prefixed_machete_head)
+    if machete_head not in all_branches():
+        return None
+    # Let's check if .git/MACHETE_HEAD points to the same revision as .git/HEAD
+    if commit_sha_by_revision(prefixed_machete_head) != commit_sha_by_revision('HEAD'):
+        return None
+    return machete_head
 
 
 def expect_no_operation_in_progress():
@@ -936,7 +951,9 @@ def expect_no_operation_in_progress():
 
 
 def current_branch_or_none():
-    return currently_checked_out_branch_or_none() or currently_rebased_branch_or_none()
+    return currently_checked_out_local_branch_or_none() \
+        or currently_rebased_branch_or_none() \
+        or currently_checked_out_remote_branch_or_none()
 
 
 def current_branch():
@@ -1099,17 +1116,15 @@ def check_out_existing_branch(b):
         # after performing a checkout above, .git/HEAD does not contain `ref: refs/remotes/...`,
         # but instead just the hash of the commit pointed by `b`.
         # AFAIK as of git 2.27.0 there's no way to force git to put anything other than a commit hash or `ref: refs/heads/...` into .git/HEAD,
-        # hence a low-level hack is necessary:
-        with open(get_git_subpath("HEAD"), 'w') as git_head_write:
-            git_head_write.write('ref: refs/remotes/' + b)
-        # And that's basically why the entire "check out remote branch" feature is marked as unsafe.
-        # This is the sole place in the entire git-machete where the underlying repository state is tampered with directly (and not via git CLI).
+        # hence a custom hack is necessary:
+        with open(get_git_subpath("MACHETE_HEAD"), "w") as git_head_write:
+            git_head_write.write("refs/remotes/" + b)
 
         warn(fmt("checked out remote branch `%s`.\n" % b,
-                 "The current state of repository is not supported directly by git, "
-                 "which only allows HEAD to be a local branch or a commit hash (detached HEAD).\n",
-                 "Avoid side-effecting actions like `git commit` or `git reset`.\n",
-                 "git-machete will not attempt to fast-forward, merge, rebase or reset this branch."))
+                 "git-machete will not attempt to fast-forward, merge, rebase or reset this branch.\n",
+                 "Since git only allows HEAD to be a local branch or a commit hash (detached HEAD),\n",
+                 "from the perspective of git, the repository is in detached HEAD state.\n"
+                 "`git machete show current`, as well as all other git-machete subcommands will treat .... TODO."))
     else:
         raise MacheteException("'%s' is not a local or remote branch" % b)
 
@@ -2327,8 +2342,9 @@ def status(warn_on_yellow_edges):
         else:
             edge_color[b] = YELLOW
 
+    ccolb = currently_checked_out_local_branch_or_none()
     crb = currently_rebased_branch_or_none()
-    ccob = currently_checked_out_branch_or_none()
+    ccorb = currently_checked_out_remote_branch_or_none()
 
     hook_path = get_hook_path("machete-status-branch")
     hook_executable = check_hook_executable(hook_path)
@@ -2379,7 +2395,7 @@ def status(warn_on_yellow_edges):
             write_unicode("  ")
 
         remote, branch_name = split_into_remote_and_branch_name(b) if b in remote_branches() else (None, b)
-        if b in (ccob, crb):  # i.e. if b is the current branch (checked out or being rebased)
+        if b in (ccolb, crb, ccorb):  # i.e. if b is the current branch (checked out or being rebased)
             if b == crb:
                 prefix = "REBASING "
             elif is_am_in_progress():
