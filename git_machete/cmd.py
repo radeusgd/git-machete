@@ -912,13 +912,29 @@ def currently_rebased_branch_or_none():
         return re.sub("^refs/heads/", "", raw)
 
 
-def currently_checked_out_branch_or_none():
+def currently_checked_out_local_branch_or_none():
     try:
         raw = popen_git("symbolic-ref", "--quiet", "HEAD").strip()
-        # We unorthodoxly allow for a remote branch (refs/remotes/...) to be the current branch as well.
-        return re.sub("^refs/[^/]+/", "", raw)
-    except MacheteException:
+        # Git doesn't allow anything other than a local branch (e.g. a remote branch or tag) to be the current branch.
+        return re.sub("^refs/heads/", "", raw)
+    except MacheteException:  # e.g. detached HEAD
         return None
+
+
+def currently_checked_out_remote_branch_or_none():
+    rhr = raw_head_reflog()
+    if not rhr:
+        return None
+    # Let's check if the latest reflog entry corresponds to a checkout with a target being a remote branch.
+    # Note that we can't figure that out from HEAD since git always treats 'git checkout <remote-branch>'
+    # as moving into detached HEAD state (so .git/HEAD would just contain commit SHA and not 'ref: refs/remotes/...').
+    match = re.search(REFLOG_CHECKOUT_PATTERN, rhr[0])
+    if not match:
+        return None
+    target = match.group(3)
+    if target not in remote_branches():
+        return None
+    return target
 
 
 def expect_no_operation_in_progress():
@@ -936,7 +952,9 @@ def expect_no_operation_in_progress():
 
 
 def current_branch_or_none():
-    return currently_checked_out_branch_or_none() or currently_rebased_branch_or_none()
+    return currently_checked_out_local_branch_or_none() \
+        or currently_rebased_branch_or_none() \
+        or currently_checked_out_remote_branch_or_none()
 
 
 def current_branch():
@@ -1095,21 +1113,14 @@ def check_out_existing_branch(b):
     elif b in remote_branches():
         run_git("checkout", "--quiet", b, "--")
 
-        # It'd be very nice if we were already done at this point... but unfortunately there's one nasty detail left:
-        # after performing a checkout above, .git/HEAD does not contain `ref: refs/remotes/...`,
+        # After performing a checkout above, .git/HEAD does not contain `ref: refs/remotes/...`,
         # but instead just the hash of the commit pointed by `b`.
-        # AFAIK as of git 2.27.0 there's no way to force git to put anything other than a commit hash or `ref: refs/heads/...` into .git/HEAD,
-        # hence a low-level hack is necessary:
-        with open(get_git_subpath("HEAD"), 'w') as git_head_write:
-            git_head_write.write('ref: refs/remotes/' + b)
-        # And that's basically why the entire "check out remote branch" feature is marked as unsafe.
-        # This is the sole place in the entire git-machete where the underlying repository state is tampered with directly (and not via git CLI).
-
-        warn(fmt("checked out remote branch `%s`.\n" % b,
-                 "The current state of repository is not supported directly by git, "
-                 "which only allows HEAD to be a local branch or a commit hash (detached HEAD).\n",
-                 "Avoid side-effecting actions like `git commit` or `git reset`.\n",
-                 "git-machete will not attempt to fast-forward, merge, rebase or reset this branch."))
+        # AFAIK as of git 2.27.0 there's no way to force git to put anything other than a commit hash or `ref: refs/heads/...` into .git/HEAD.
+        # git-machete will only distinguish "real detached HEAD" from "remote branch checked out" by the latest entry in reflog of HEAD.
+        warn(fmt("checking out remote branch `%s`.\n" % b,
+                 "git-machete will treat `%s` as HEAD in most contexts, but will not attempt to fast-forward, merge, rebase or reset this branch.\n" % b,
+                 "Since git only allows HEAD to be a local branch or a commit hash (detached HEAD),\n",
+                 "from the perspective of git and other tools (IDEs etc.), the repository is in detached HEAD state.\n"))
     else:
         raise MacheteException("'%s' is not a local or remote branch" % b)
 
@@ -1359,11 +1370,17 @@ def filtered_reflog(b, prefix):
     return result
 
 
+raw_head_reflog_cached = None
+
+
 def raw_head_reflog():
-    # %gd - reflog selector (HEAD@{<unix-timestamp> <time-zone>} for `--date=raw`;
-    #   `--date=unix` is not available on some older versions of git)
-    # %gs - reflog subject
-    return non_empty_lines(popen_git("reflog", "show", "--format=%gd:%gs", "--date=raw"))
+    global raw_head_reflog_cached
+    if raw_head_reflog_cached is None:
+        # %gd - reflog selector (HEAD@{<unix-timestamp> <time-zone>} for `--date=raw`;
+        #   `--date=unix` is not available on some older versions of git)
+        # %gs - reflog subject
+        raw_head_reflog_cached = non_empty_lines(popen_git("reflog", "show", "--format=%gd:%gs", "--date=raw"))
+    return raw_head_reflog_cached
 
 
 REFLOG_CHECKOUT_PATTERN = "^HEAD@{([0-9]+) .+\\}:checkout: moving from (.+) to (.+)$"
@@ -1374,14 +1391,15 @@ def get_latest_checkout_unix_timestamp_by_branch():
     for entry in raw_head_reflog():
         match = re.search(REFLOG_CHECKOUT_PATTERN, entry)
         if match:
-            from_branch = match.group(2)
-            to_branch = match.group(3)
+            source = match.group(2)
+            target = match.group(3)
             # Only the latest occurrence for any given branch is interesting
-            # (i.e. the first one to occur in reflog)
-            if from_branch not in ts_by_branch:
-                ts_by_branch[from_branch] = int(match.group(1))
-            if to_branch not in ts_by_branch:
-                ts_by_branch[to_branch] = int(match.group(1))
+            # (i.e. the first one to occur in reflog).
+            # Note that both source and target can be commit SHAs, not branch names.
+            if source in all_branches() and source not in ts_by_branch:
+                ts_by_branch[source] = int(match.group(1))
+            if target in all_branches() and target not in ts_by_branch:
+                ts_by_branch[target] = int(match.group(1))
     return ts_by_branch
 
 
@@ -2347,8 +2365,9 @@ def status(warn_on_yellow_edges):
         else:
             edge_color[b] = YELLOW
 
+    ccolb = currently_checked_out_local_branch_or_none()
     crb = currently_rebased_branch_or_none()
-    ccob = currently_checked_out_branch_or_none()
+    ccorb = currently_checked_out_remote_branch_or_none()
 
     hook_path = get_hook_path("machete-status-branch")
     hook_executable = check_hook_executable(hook_path)
@@ -2399,7 +2418,7 @@ def status(warn_on_yellow_edges):
             write_unicode("  ")
 
         remote, branch_name = split_into_remote_and_branch_name(b) if b in remote_branches() else (None, b)
-        if b in (ccob, crb):  # i.e. if b is the current branch (checked out or being rebased)
+        if b in (ccolb, crb, ccorb):  # i.e. if b is the current branch (checked out or being rebased)
             if b == crb:
                 prefix = "REBASING "
             elif is_am_in_progress():
