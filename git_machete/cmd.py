@@ -1122,7 +1122,8 @@ def check_out_revision(b):
         # AFAIK as of git 2.27.0 there's no way to force git to put anything other than a commit hash or `ref: refs/heads/...` into .git/HEAD.
         # git-machete will only distinguish "real detached HEAD" from "remote branch checked out" by the latest entry in reflog of HEAD.
         warn(fmt("checking out remote branch `%s`.\n" % b,
-                 "git-machete will treat `%s` as HEAD in most contexts, but will not attempt to fast-forward, merge, rebase or reset this branch.\n" % b,
+                 "git-machete will treat `%s` as HEAD in most contexts (e.g. `git machete show current`), " % b,
+                 "but will not attempt to fast-forward, merge, rebase or reset this branch.\n",
                  "Since git only allows HEAD to be a local branch or a commit hash (detached HEAD),\n",
                  "from the perspective of git and other tools (IDEs etc.), the repository is in detached HEAD state.\n"))
 
@@ -1406,15 +1407,22 @@ def get_latest_checkout_unix_timestamp_by_branch():
 
 
 def get_latest_checkout_target_revision_or_none():
+    # Prefer the target of latest-but-one checkout entry,
+    # since targets preserve remote branch names
+    # (while sources are always just commit hashes in case of checkout from detached HEAD),
+    # but if there's only one checkout in the entire reflog,
+    # then use source of latest checkout entry.
+    first_match_source_as_fallback = None
     first_match_skipped = False
     for entry in raw_head_reflog():
         match = re.search(REFLOG_CHECKOUT_PATTERN, entry)
         if match:
             if not first_match_skipped:
+                first_match_source_as_fallback = match.group(2)
                 first_match_skipped = True
             else:
                 return match.group(3)
-    return None
+    return first_match_source_as_fallback
 
 
 branch_defs_by_sha_in_reflog = None
@@ -2774,7 +2782,7 @@ def usage(c=None):
             Remote branches are interpreted as "blindly following a remote", so git-machete makes sure that they can be <b>locally checked out</b>
             (see `git machete help go` for the caveats involved) but never <b>locally modified</b>.
             It is in particular impossible to merge anything directly into a remote branch, rebase a remote branch or reset a remote branch to anything.
-            This feature is intended mostly to reduce the overhead related to viewing branches of other users, e.g. for the purpose of review.
+            This feature is intended mostly to reduce the overhead related to viewing branches managed by other users, e.g. for the purpose of review.
 
             Every branch name can be followed (after a single space as a delimiter) by a custom annotation - a PR number in the above example.
             The annotations don't influence the way `git machete` operates other than that they are displayed in the output of the `status` command.
@@ -2784,34 +2792,26 @@ def usage(c=None):
             It's only important to be consistent wrt. the sequence of characters used for indentation between all lines.
         """,
         "go": """
-            <b>Usage: git machete g[o] [-b/--branch] [<direction>|<local or remote branch>|-]</b>
+            <b>Usage: git machete g[o] -|<direction></b>
             where <direction> is one of: `d[own]`, `f[irst]`, `l[ast]`, `n[ext]`, `p[rev]`, `r[oot]`, `u[p]`
 
-            When `-b`/`--branch` is absent and the parameter has a valid value for a direction,
+            When the parameter has a valid value for a direction,
             checks out the branch specified by the given direction relative to the currently checked out branch.
             Roughly equivalent to `git checkout $(git machete show <direction>)`.
             See `git machete help show` on more details on meaning of each direction.
-
-            When `-b`/`--branch` is present, or the parameter does NOT have a valid value for a direction,
-            then the parameter is interpreted as a branch name and `go` behaves like a simplified version of `git checkout` or `git switch`.
-            The notable difference is that `git machete go` also allows for <b>checking out a remote branch directly</b>,
-            i.e. without creating a local branch to track the remote.
-            For example, `git checkout origin/master` will transition the repository to the detached HEAD state (with HEAD pointing to the same commit as `origin/master`),
-            while `git machete go origin/master` will make the repository behave as if `origin/master` is the current branch.
 
             When invoked as `git machete go -`, checks out the previous checked out branch.
             Similar to `git checkout -`, with the difference that also allows for checking out a remote branch
             (if it was previously checked out by `git machete go` or `git machete traverse`).
 
-            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature should be used with extra care.
-            As for now, this is the only feature of git-machete that circumvents the documented git's command-line interface
-            and instead modifies the repository state (specifically, .git/HEAD) directly.
-            As a consequence, it's possible that a future release of git might break this feature for git-machete.
-            <b>External tools (notably JetBrains IDEs) may crash/misbehave to various degrees when a remote branch is checked out</b>.
-
-            <b>Options:</b>
-              <b>-b, --branch=<branch></b>      Interpret the argument as a branch name rather than a direction.
-                                         Only strictly needed when a branch name also happens to be a name of a supported direction, or a one-letter shortcut thereof.
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
+            <red>Disclaimer</red>: since git does NOT support checking out remote branches natively, this feature TODO
         """,
         "help": """
             <b>Usage: git machete help [<command>]</b>
@@ -3499,24 +3499,21 @@ def launch(orig_args):
             # No need to read definition file.
             usage("format")
         elif cmd in ("g", "go"):
-            param = check_optional_param(parse_options(args, "b:", ["branch="]), forbid_lone_hyphen=False)
+            param = check_optional_param(parse_options(args), forbid_lone_hyphen=False)
             expect_no_operation_in_progress()
-            if opt_branch:
-                dest = opt_branch
+            if not param:
+                raise MacheteException("`%s` expects exactly one argument: one of `%s` or `-`" % (cmd, allowed_directions(allow_current=False)))
+            if param == "-":
                 # No need to read definition file.
-                if dest not in all_branches():
-                    raise MacheteException("`%s` is not a local or remote branch" % dest)
+                dest = get_latest_checkout_target_revision_or_none()
+                if not dest:
+                    raise MacheteException("Cannot figure out previous branch")
             else:
-                if not param:
-                    raise MacheteException("`%s` expects exactly one argument: one of `%s` or a branch name" % (cmd, allowed_directions(allow_current=False)))
-                if param == "-":
-                    dest = get_latest_checkout_target_revision_or_none()
-                else:
-                    read_definition_file()
-                    dest = parse_direction_or_none(direction=param, include_current=False, down_pick_if_multiple=True) or param
-                    if dest not in all_branches():
-                        raise MacheteException("`%s` is not a local or remote branch, or any of `%s`" % (dest, allowed_directions(allow_current=False)))
-            if dest and dest != current_branch_or_none():
+                read_definition_file()
+                dest = parse_direction_or_none(direction=param, include_current=False, down_pick_if_multiple=True)
+                if not dest:
+                    raise MacheteException("`%s` is not any of `%s` or `-`" % (param, allowed_directions(allow_current=False)))
+            if dest != current_branch_or_none():
                 check_out_revision(dest)
         elif cmd == "help":
             param = check_optional_param(parse_options(args))

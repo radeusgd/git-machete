@@ -52,7 +52,7 @@ _git-machete() {
                     _arguments \
                         '(-C --checked-out-since)'{-C,--checked-out-since=}'[Only consider branches checked out at least once since the given date]' \
                         '(-l --list-commits)'{-l,--list-commits}'[List the messages of commits introduced on each branch]' \
-                        '(-r --roots)'{-r,--roots=}'[Comma-separated list of branches to be considered roots of trees of branch dependencies (typically develop and/or master)]: :__git_branch_names' \
+                        '(-r --roots)'{-r,--roots=}'[Comma-separated list of local branches to be considered roots of trees of branch dependencies (typically develop and/or master)]: :__git_branch_names' \
                         '(-y --yes)'{-y,--yes}'[Do not ask for confirmation]' \
                     && ret=0
                     ;;
@@ -69,15 +69,14 @@ _git-machete() {
                     && ret=0
                     ;;
                 (g|go)
-                    _arguments '1:: :__git_machete_go_params' \
-                        '(-b --branch)'{-b,--branch=}'[Interpret the argument as a branch name rather than a direction]: :__git_remote_and_local_branch_names' \
-                    && ret=0
+                    _arguments '1:: :__git_machete_go_params' && ret=0
                     ;;
                 (help)
                     _arguments '1:: :__git_machete_help_topics' && ret=0
                     ;;
                 (is-managed)
-                    _arguments '1:: :__git_remote_and_local_branch_names' && \
+                    _arguments \
+                        '1:: :__git_remote_and_local_branch_names' \
                         '(--and-local)'--and-local'[Additionally, require that the branch is local]' \
                         '(--and-remote)'--and-remote'[Additionally, require that the branch is remote]' \
                     && ret=0
@@ -193,7 +192,6 @@ __git_machete_go_params() {
     local destinations
     IFS=$'\n' destinations=(
         $(__git_machete_print_directions_no_current)
-        $(git machete list managed 2>/dev/null)
     )
     _describe -t destinations 'destination' destinations "$@"
 }
