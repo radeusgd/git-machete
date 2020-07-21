@@ -934,6 +934,13 @@ def currently_checked_out_remote_branch_or_none():
     target = match.group(3)
     if target not in remote_branches():
         return None
+    # Let's make sure that the HEAD points to the same commit
+    # as the most recently (reflog-wise) checked out remote branch (let's call it origin/X).
+    # It's possible that 'git fetch' updated origin/X to a new commit - in such case the detached HEAD was not updated,
+    # and git-machete should no longer treat origin/X as a current branch to avoid user's confusion
+    # (since the current commit is different than the one pointed by origin/X).
+    if commit_sha_by_revision(target, prefix="refs/remotes/") != commit_sha_by_revision("HEAD"):
+        return None
     return target
 
 
@@ -1107,12 +1114,9 @@ def merged_local_branches():
     ))
 
 
-def check_out_existing_branch(b):
-    if b in local_branches():
-        run_git("checkout", "--quiet", b, "--")
-    elif b in remote_branches():
-        run_git("checkout", "--quiet", b, "--")
-
+def check_out_revision(b):
+    run_git("checkout", "--quiet", b, "--")
+    if b in remote_branches():
         # After performing a checkout above, .git/HEAD does not contain `ref: refs/remotes/...`,
         # but instead just the hash of the commit pointed by `b`.
         # AFAIK as of git 2.27.0 there's no way to force git to put anything other than a commit hash or `ref: refs/heads/...` into .git/HEAD.
@@ -1121,8 +1125,6 @@ def check_out_existing_branch(b):
                  "git-machete will treat `%s` as HEAD in most contexts, but will not attempt to fast-forward, merge, rebase or reset this branch.\n" % b,
                  "Since git only allows HEAD to be a local branch or a commit hash (detached HEAD),\n",
                  "from the perspective of git and other tools (IDEs etc.), the repository is in detached HEAD state.\n"))
-    else:
-        raise MacheteException("'%s' is not a local or remote branch" % b)
 
 
 def get_hook_path(hook_name):
@@ -1403,7 +1405,7 @@ def get_latest_checkout_unix_timestamp_by_branch():
     return ts_by_branch
 
 
-def get_latest_checkout_target_branch_or_none():
+def get_latest_checkout_target_revision_or_none():
     first_match_skipped = False
     for entry in raw_head_reflog():
         match = re.search(REFLOG_CHECKOUT_PATTERN, entry)
@@ -1411,11 +1413,7 @@ def get_latest_checkout_target_branch_or_none():
             if not first_match_skipped:
                 first_match_skipped = True
             else:
-                target = match.group(3)
-                # It usually isn't the user's intention when going to previous branch
-                # to actually end up in detached HEAD state.
-                if not is_full_sha(target):
-                    return target
+                return match.group(3)
     return None
 
 
@@ -1868,7 +1866,7 @@ def slide_out(branches_to_slide_out):
         up_branch[b] = None
         down_branches[b] = None
 
-    check_out_existing_branch(new_downstream)
+    check_out_revision(new_downstream)
     up_branch[new_downstream] = new_upstream
     down_branches[new_upstream] = [(new_downstream if x == branches_to_slide_out[0] else x) for x in down_branches[new_upstream]]
     save_definition_file()
@@ -2100,14 +2098,14 @@ def traverse():
         dest = root_branch(current_branch(), if_unmanaged=PICK_FIRST_ROOT)
         print_new_line(False)
         print("Checking out the root branch (%s)" % bold(dest))
-        check_out_existing_branch(dest)
+        check_out_revision(dest)
         cb = dest
     elif opt_start_from == "first-root":
         # Note that we already ensured that there is at least one managed branch.
         dest = managed_branches[0]
         print_new_line(False)
         print("Checking out the first root branch (%s)" % bold(dest))
-        check_out_existing_branch(dest)
+        check_out_revision(dest)
         cb = dest
     else:  # opt_start_from == "here"
         cb = current_branch()
@@ -2147,7 +2145,7 @@ def traverse():
         if b != cb and (needs_slide_out or needs_parent_sync or needs_remote_sync):
             print_new_line(False)
             sys.stdout.write("Checking out %s\n" % bold(b))
-            check_out_existing_branch(b)
+            check_out_revision(b)
             cb = b
             print_new_line(False)
             status(warn_on_yellow_edges=True)
@@ -2306,9 +2304,9 @@ def traverse():
                     pick_remote(b)
 
     if opt_return_to == "here":
-        check_out_existing_branch(initial_branch)
+        check_out_revision(initial_branch)
     elif opt_return_to == "nearest-remaining":
-        check_out_existing_branch(nearest_remaining_branch)
+        check_out_revision(nearest_remaining_branch)
     # otherwise opt_return_to == "stay", so no action is needed
 
     print_new_line(False)
@@ -3512,16 +3510,14 @@ def launch(orig_args):
                 if not param:
                     raise MacheteException("`%s` expects exactly one argument: one of `%s` or a branch name" % (cmd, allowed_directions(allow_current=False)))
                 if param == "-":
-                    dest = get_latest_checkout_target_branch_or_none()
-                    if dest not in all_branches():
-                        raise MacheteException("Cannot determine previous branch")
+                    dest = get_latest_checkout_target_revision_or_none()
                 else:
                     read_definition_file()
                     dest = parse_direction_or_none(direction=param, include_current=False, down_pick_if_multiple=True) or param
                     if dest not in all_branches():
                         raise MacheteException("`%s` is not a local or remote branch, or any of `%s`" % (dest, allowed_directions(allow_current=False)))
-            if dest != current_branch_or_none():
-                check_out_existing_branch(dest)
+            if dest and dest != current_branch_or_none():
+                check_out_revision(dest)
         elif cmd == "help":
             param = check_optional_param(parse_options(args))
             # No need to read definition file.
