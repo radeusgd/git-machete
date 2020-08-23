@@ -6,7 +6,8 @@
 [![Snap](https://snapcraft.io/git-machete/badge.svg)](https://snapcraft.io/git-machete)
 [![Snap build status](https://build.snapcraft.io/badge/VirtusLab/git-machete.svg)](https://build.snapcraft.io/user/VirtusLab/git-machete)
 
-![](https://raw.githubusercontent.com/VirtusLab/git-machete/master/logo.png)
+<img src="docs/logo.svg"
+     style="width: 100%; display: block; margin-bottom: 10pt;" />
 
 **git machete is a versatile tool for organizing your git repo:**
 
@@ -16,10 +17,13 @@
 
 `git machete traverse` semi-automatically traverses the branches, helping you effortlessly rebase, merge, push and pull.
 
-![git machete discover, status & traverse](https://raw.githubusercontent.com/VirtusLab/git-machete/master/docs/discover-status-traverse.gif)
+<p align="center">
+    <img src="https://raw.githubusercontent.com/VirtusLab/git-machete/master/docs/discover-status-traverse.gif"
+         alt="git machete discover, status and traverse" />
+</p>
 
-
-A port to an IntelliJ plugin is under development, see [VirtusLab/git-machete-intellij-plugin](http://github.com/VirtusLab/git-machete-intellij-plugin/).
+See also [VirtusLab/git-machete-intellij-plugin](https://github.com/VirtusLab/git-machete-intellij-plugin#git-machete-intellij-plugin) &mdash;
+a port of this tool into a plugin for the IntelliJ Platform products.
 
 
 ## Install
@@ -39,7 +43,7 @@ brew install git-machete
 
 ### Using Snappy (most Linux distributions)
 
-Tip: check the [guide on installing snapd](https://snapcraft.io/docs/installing-snapd) if you don't have Snap support set up yet in your system.
+**Tip:** check the [guide on installing snapd](https://snapcraft.io/docs/installing-snapd) if you don't have Snap support set up yet in your system.
 
 ```shell script
 sudo snap install --classic git-machete
@@ -47,11 +51,11 @@ sudo snap install --classic git-machete
 
 It can also be installed via Ubuntu Software (simply search for `git-machete`).
 
-Note: classic confinement is necessary to ensure access to the editor installed in the system (to edit e.g. .git/machete file or rebase TODO list).
+**Note:** classic confinement is necessary to ensure access to the editor installed in the system (to edit e.g. .git/machete file or rebase TODO list).
 
 ### Using PPA (Ubuntu)
 
-Tip: run `sudo apt-get install -y software-properties-common` first if `add-apt-repository` is not available on your system.
+**Tip:** run `sudo apt-get install -y software-properties-common` first if `add-apt-repository` is not available on your system.
 
 ```shell script
 sudo add-apt-repository ppa:virtuslab/git-machete
@@ -85,7 +89,7 @@ You need to have Python and `pip` installed from system packages.
 sudo -H pip install git-machete
 ```
 
-Tip: pass an extra `-U` flag to `pip install` to upgrade an already installed version.
+**Tip:** pass an extra `-U` flag to `pip install` to upgrade an already installed version.
 
 ### Using pip without sudo (user-wide install)
 
@@ -97,23 +101,43 @@ pip install --user git-machete
 
 Please verify that your `PATH` variable has `${HOME}/.local/bin/` included.
 
-Tip: pass an extra `-U` flag to `pip install` to upgrade an already installed version.
+**Tip:** pass an extra `-U` flag to `pip install` to upgrade an already installed version.
 
 
 ## Quick start
 
+### Discover the branch layout
+
 ```shell script
 cd your-repo/
 git machete discover
-  # (see and possibly edit the suggested layout of branches - branch layout is always kept as text file .git/machete)
-git machete traverse --fetch --start-from=first-root
-  # (put each branch one by one in sync with its parent and remote counterpart)
 ```
 
+See and possibly edit the suggested layout of branches.
+Branch layout is always kept as a `.git/machete` text file.
 
-## Git compatibility
+### See the current repository state
+```shell script
+git machete status --list-commits
+```
 
-git-machete (since version 2.13.0) is compatible with git >= 1.7.10.
+**Green** edge means the given branch is **in sync** with its parent. <br/>
+**Red** edge means it is **out of sync** &mdash; parent has some commits that the given branch does not have. <br/>
+**Gray** edge means that the branch is **merged** to its parent.
+
+### Rebase, reset to remote, push, pull all branches as needed
+```shell script
+git machete traverse --fetch --start-from=first-root
+```
+
+Put each branch one by one in sync with its parent and remote tracking branch.
+
+### Fast-forward current branch to match a child branch
+```shell script
+git machete advance
+```
+
+Useful for merging the child branch to the current branch in a linear fashion (without creating a merge commit).
 
 
 ## Reference
@@ -128,7 +152,13 @@ The more advanced features like automated traversal, upstream inference and tree
 [https://medium.com/virtuslab/git-machete-strikes-again-traverse-the-git-rebase-jungle-even-faster-with-v2-0-f43ebaf8abb0](https://medium.com/virtuslab/git-machete-strikes-again-traverse-the-git-rebase-jungle-even-faster-with-v2-0-f43ebaf8abb0).
 
 
+## Git compatibility
+
+git-machete (since version 2.13.0) is compatible with git >= 1.7.10.
+
+
 ## Contributions
 
 Contributions are welcome! See [contributing guidelines](CONTRIBUTING.md) for details.
-Help would be especially appreciated with Python code style and refactoring - so far more focus has been put on features, documentation and automating the distribution.
+Help would be especially appreciated with Python code style and refactoring &mdash;
+so far more focus has been put on features, documentation and automating the distribution.
